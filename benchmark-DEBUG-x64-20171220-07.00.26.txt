@@ -1,0 +1,33 @@
+benchmark-DEBUG-x64-20171220-07.00.26.txt
+test
+
+t = 1.956 s, u = 32.962 ms, d = 8.109 ms, fps = 1 fps
+t = 2.957 s, u = 28.805 ms, d = 6.130 ms, fps = 24 fps
+t = 3.974 s, u = 30.202 ms, d = 6.228 ms, fps = 26 fps
+t = 4.982 s, u = 31.039 ms, d = 6.585 ms, fps = 26 fps
+t = 6.001 s, u = 29.135 ms, d = 6.044 ms, fps = 25 fps
+t = 7.025 s, u = 27.856 ms, d = 6.218 ms, fps = 27 fps
+t = 8.036 s, u = 28.668 ms, d = 6.285 ms, fps = 28 fps
+t = 9.053 s, u = 27.719 ms, d = 6.291 ms, fps = 27 fps
+t = 10.056 s, u = 27.469 ms, d = 6.034 ms, fps = 28 fps
+t = 11.076 s, u = 27.611 ms, d = 6.502 ms, fps = 28 fps
+t = 12.105 s, u = 28.714 ms, d = 6.951 ms, fps = 27 fps
+t = 13.111 s, u = 27.112 ms, d = 6.361 ms, fps = 27 fps
+t = 14.118 s, u = 27.300 ms, d = 6.243 ms, fps = 28 fps
+t = 15.133 s, u = 27.395 ms, d = 6.382 ms, fps = 28 fps
+t = 16.135 s, u = 27.950 ms, d = 6.593 ms, fps = 28 fps
+t = 17.169 s, u = 27.039 ms, d = 6.350 ms, fps = 27 fps
+t = 18.183 s, u = 27.469 ms, d = 6.350 ms, fps = 29 fps
+t = 19.190 s, u = 27.220 ms, d = 6.240 ms, fps = 28 fps
+t = 20.223 s, u = 30.020 ms, d = 7.027 ms, fps = 28 fps
+t = 21.244 s, u = 37.784 ms, d = 7.280 ms, fps = 25 fps
+t = 22.292 s, u = 40.535 ms, d = 6.396 ms, fps = 21 fps
+t = 23.313 s, u = 48.342 ms, d = 7.174 ms, fps = 19 fps
+t = 24.348 s, u = 48.225 ms, d = 7.346 ms, fps = 17 fps
+t = 25.362 s, u = 50.326 ms, d = 7.310 ms, fps = 17 fps
+t = 26.378 s, u = 45.389 ms, d = 7.060 ms, fps = 16 fps
+t = 27.379 s, u = 39.060 ms, d = 7.007 ms, fps = 18 fps
+t = 28.398 s, u = 38.063 ms, d = 6.988 ms, fps = 21 fps
+t = 29.399 s, u = 33.788 ms, d = 6.988 ms, fps = 21 fps
+t = 30.410 s, u = 32.515 ms, d = 6.655 ms, fps = 24 fps
+t = 38.500 s, u = 33.692 ms, d = 6.338 ms, fps = 24 fps

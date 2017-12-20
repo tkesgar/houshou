@@ -78,6 +78,14 @@ struct Particle
     void quadraticInterpolationKernel();
 };
 
+struct Polygon
+{
+    // Polygon points.
+    std::vector<ci::vec2> points;
+
+    const bool isInside(const float x, const float y) const;
+};
+
 struct Node
 {
     // Node physical properties.
@@ -103,6 +111,9 @@ struct Node
 
 class Simulator
 {
+    // Threads.
+    std::vector<std::thread> threads;
+
     // Array of grids.
     Node* grid;
 
@@ -117,22 +128,26 @@ class Simulator
         float p11, float x11, float y11,
         float u, float v
     );
+
 public:
     // Array of materials.
-    Material               materials[MATERIALS_COUNT];
+    Material materials[MATERIALS_COUNT];
 
     // List of particles.
-    std::vector<Particle>  particles;
+    std::vector<Particle> particles;
+
+    // List of polygons.
+    std::vector<Polygon> polygons;
 
     // Simulation grid size.
-    const int              gridW, gridH;
+    const int gridW, gridH;
     // Simulation grid scale.
-    const float            scale;
+    const float scale;
     
     // Static polygon matrix (will directly be copied on update).
-    bool* staticPolygonMatrix;
+    bool* terrainMatrix;
     // Dynamic polygon matrix.
-    bool* polygonMatrix;
+    bool* solidMatrix;
     // Normal matrix (result of marching squares).
     int* normalMatrix;
 
@@ -141,4 +156,8 @@ public:
     
     // Main update function.
     void update(double deltaTime);
+
+    // Thread count functions.
+    const int getThreadCount() const;
+    void setThreadCount(int threadCount);
 };

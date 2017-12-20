@@ -314,3 +314,9 @@ OpenCover/
 
 # Azure Stream Analytics local run output 
 ASALocalRun/
+
+## Additional gitignores for this project.
+##
+
+# Ignore Cinder linked folder
+cinder/

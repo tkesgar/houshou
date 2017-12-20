@@ -5,6 +5,11 @@ using namespace std;
 using namespace ci;
 
 #define SMALL 0.001f
+#define TURN_R -1
+#define COLLINEAR 0
+#define TURN_L 1
+
+inline const int turn(const vec2 p, const vec2 q, const vec2 r);
 
 inline const int lineTest(
     const float xtest, const float ytest,
@@ -13,8 +18,6 @@ inline const int lineTest(
 );
 
 inline const vec2 normalIndex(const int index);
-
-std::vector<std::thread> threads(thread::hardware_concurrency());
 
 Particle::Particle(
     const Simulator& simulator,
@@ -66,20 +69,41 @@ Node::Node() :
     cgx(), cgy()
 { }
 
+const bool Polygon::isInside(const float x, const float y) const
+{
+    const vec2 p(x, y);
+    const int pointsCount = int(points.size());
+    for (int i = 0; i < pointsCount; i++)
+    {
+        const int j = (i + 1) % pointsCount;
+        const vec2
+            a = points[i],
+            b = points[j];
+
+        if (turn(a, b, p) != TURN_L)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 Simulator::Simulator(int gridWidth, int gridHeight, float scale) :
     scale(scale),
-    gridW(gridWidth),
-    gridH(gridHeight),
-    activeGrids(gridWidth * gridHeight)
+    gridW(int(gridWidth / scale)),
+    gridH(int(gridHeight / scale)),
+    activeGrids(gridWidth * gridHeight),
+    threads(thread::hardware_concurrency())
 {
     // Initialize grid array.
     grid = new Node[gridWidth * gridHeight]();
 
     // Initialize static polygon matrix.
-    staticPolygonMatrix = new bool[gridWidth * gridHeight]();
+    terrainMatrix = new bool[gridWidth * gridHeight]();
 
     // Initialize polygon matrix.
-    polygonMatrix = new bool[gridWidth * gridHeight]();
+    solidMatrix = new bool[gridWidth * gridHeight]();
 
     // Initialize normal matrix.
     normalMatrix = new int[gridWidth * gridHeight]();
@@ -94,8 +118,8 @@ Simulator::Simulator(int gridWidth, int gridHeight, float scale) :
 Simulator::~Simulator()
 {
     delete grid;
-    delete staticPolygonMatrix;
-    delete polygonMatrix;
+    delete terrainMatrix;
+    delete solidMatrix;
     delete normalMatrix;
 }
 
@@ -122,13 +146,50 @@ void Simulator::update(double deltaTime)
         particleCount = int(particles.size()),
         threadCount = int(threads.size());
 
+    // Reset solid matrix.
+    memset(solidMatrix, false, sizeof(bool) * GRID_SIZE(gridW, gridH));
+
     // Copy static polygon matrix to polygon matrix.
     memcpy_s(
-        polygonMatrix,       sizeof(bool) * GRID_SIZE(gridW, gridH),
-        staticPolygonMatrix, sizeof(bool) * GRID_SIZE(gridW, gridH)
+        solidMatrix, sizeof(bool) * GRID_SIZE(gridW, gridH),
+        terrainMatrix, sizeof(bool) * GRID_SIZE(gridW, gridH)
     );
 
-    // TODO Add dynamic polygon.
+    // Loop through polygons and set solid matrix.
+    for (auto it = polygons.cbegin(); it != polygons.cend(); it++)
+    {
+        const auto& polygon = *it;
+
+        int
+            minX = gridW,
+            minY = gridH,
+            maxX = 0,
+            maxY = 0;
+
+        for (auto jt = polygon.points.cbegin(); jt != polygon.points.cend(); jt++)
+        {
+            const vec2& p = *jt;
+
+            minX = min(minX, int(p.x));
+            maxX = max(maxX, int(p.x));
+            minY = min(minY, int(p.y));
+            maxY = max(maxY, int(p.y));
+        }
+        
+        for (int x = minX; x <= maxX; x++)
+        {
+            for (int y = minY; y <= maxY; y++)
+            {
+                int pos = GRID_INDEX(x, y, gridH);
+
+                if (!solidMatrix[pos])
+                {
+                    auto result = polygon.isInside(float(x), float(y));
+                    solidMatrix[pos] = result;
+                }
+            }
+        }
+    }
 
     // Calculate normal matrix.
     for (int x = 0; x < gridW - 1; x++)
@@ -142,10 +203,10 @@ void Simulator::update(double deltaTime)
                 bl3 = GRID_INDEX(x, y + 1, gridH);
 
             int index = 0b0000;
-            if (polygonMatrix[tl0]) index |= 0b1000;
-            if (polygonMatrix[tr1]) index |= 0b0100;
-            if (polygonMatrix[br2]) index |= 0b0010;
-            if (polygonMatrix[bl3]) index |= 0b0001;
+            if (solidMatrix[tl0]) index |= 0b1000;
+            if (solidMatrix[tr1]) index |= 0b0100;
+            if (solidMatrix[br2]) index |= 0b0010;
+            if (solidMatrix[bl3]) index |= 0b0001;
 
             normalMatrix[GRID_INDEX(x, y, gridH)] = index;
         }
@@ -710,6 +771,22 @@ void Simulator::update(double deltaTime)
     // ---------------------------------------------------------------------------------------------
 }
 
+const int Simulator::getThreadCount() const
+{
+    return int(threads.size());
+}
+
+void Simulator::setThreadCount(int threadCount)
+{
+    threads = vector<thread>(threadCount);
+}
+
+const int turn(const vec2 p, const vec2 q, const vec2 r)
+{
+    const float result = ((r.x - q.x) * (p.y - q.y)) - ((r.y - q.y) * (p.x - q.x));
+    return (abs(result) < SMALL) ? COLLINEAR : (signbit(result) ? TURN_L : TURN_R);
+}
+
 const int lineTest(
     const float xtest, const float ytest,
     const float x1, const float y1,
@@ -728,23 +805,23 @@ const vec2 normalIndex(const int index)
 {
     switch (index)
     {
-    case 0b0001: return vec2( 1, -1);
-    case 0b1110: return vec2(-1,  1);
+    case 0b0001: return vec2(1, -1);
+    case 0b1110: return vec2(-1, 1);
 
     case 0b0010: return vec2(-1, -1);
-    case 0b1101: return vec2( 1,  1);
+    case 0b1101: return vec2(1, 1);
 
-    case 0b0011: return vec2( 0, -1);
-    case 0b1100: return vec2( 0,  1);
+    case 0b0011: return vec2(0, -1);
+    case 0b1100: return vec2(0, 1);
 
-    case 0b0100: return vec2(-1,  1);
-    case 0b1011: return vec2( 1, -1);
+    case 0b0100: return vec2(-1, 1);
+    case 0b1011: return vec2(1, -1);
 
-    case 0b0110: return vec2(-1,  0);
-    case 0b1001: return vec2( 1,  0);
+    case 0b0110: return vec2(-1, 0);
+    case 0b1001: return vec2(1, 0);
 
     case 0b0111: return vec2(-1, -1);
-    case 0b1000: return vec2( 1,  1);
+    case 0b1000: return vec2(1, 1);
 
     case 0b0101:
     case 0b1010:
