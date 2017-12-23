@@ -75,7 +75,12 @@ const bool Polygon::isInside(const float x, const float y) const
     const int pointsCount = int(points.size());
     for (int i = 0; i < pointsCount; i++)
     {
-        const int j = (i + 1) % pointsCount;
+        int j = i + 1;
+        if (j >= pointsCount)
+        {
+            j = 0;
+        }
+
         const vec2
             a = points[i],
             b = points[j];
@@ -154,7 +159,7 @@ void Simulator::update(double deltaTime)
         solidMatrix, sizeof(bool) * GRID_SIZE(gridW, gridH),
         terrainMatrix, sizeof(bool) * GRID_SIZE(gridW, gridH)
     );
-
+    
     // Loop through polygons and set solid matrix.
     for (auto it = polygons.cbegin(); it != polygons.cend(); it++)
     {
@@ -190,7 +195,7 @@ void Simulator::update(double deltaTime)
             }
         }
     }
-
+    
     // Calculate normal matrix.
     for (int x = 0; x < gridW - 1; x++)
     {

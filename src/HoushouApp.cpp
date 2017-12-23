@@ -90,7 +90,9 @@ void HoushouApp::init()
     // Open config file stream.
     // ---------------------------------------------------------------------------------------------
 
-    auto configPath = getAssetPath("config.txt");
+    const auto& args = getCommandLineArgs();
+    auto configFile = args.size() > 1 ? (format{ "%s.txt" } % args[1]).str() : "config.txt";
+    auto configPath = getAssetPath(configFile);
     fstream fconfig(configPath, ios::in);
     
     console() << format{ "Reading configuration file from '%s'." } % configPath << endl;
@@ -120,6 +122,13 @@ void HoushouApp::init()
     // ---------------------------------------------------------------------------------------------
 
     fconfig >> threadCount;
+
+    if (threadCount <= 0)
+    {
+        threadCount = thread::hardware_concurrency();
+        console() << "Using number of threads based on thread::hardware_concurrency()." << endl;
+    }
+
     sim->setThreadCount(threadCount);
 
     console() << format{ "Thread count: %d" } % threadCount << endl;
