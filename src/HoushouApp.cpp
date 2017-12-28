@@ -10,65 +10,167 @@ using namespace boost;
 using namespace ci;
 using namespace ci::app;
 
-extern const char
-    *VERTEX_SHADER,
-    *GEOMETRY_SHADER,
-    *FRAGMENT_SHADER;
-
+// Color for terrain.
 const Color
     TERRAIN_COLOR = Color(0.64f, 0.64f, 0.16f),
-    SKY_COLOR = Color::black();
+    POLYGON_COLOR = Color(0.0f, 0.0f, 0.75f);
 
-struct PerformanceLog
+// Struct to store benchmark data.
+struct BenchmarkRecord
 {
-    double elapsedTime;
-    double avgUpdateTime;
-    double avgDrawTime;
-    int avgFps;
+    double t;
+    double u;
+    double d;
+    float fps;
 };
+
+/// ================================================================================================
+/// Shaders for fluid rendering
+/// ================================================================================================
+
+const char* VERTEX_SHADER = CI_GLSL(150,
+    uniform mat4 ciModelViewProjection;
+
+    in vec4 ciPosition;
+    in vec4 ciColor;
+    in vec4 trailPosition;
+
+    out vec4 vColor;
+    out vec4 trailPos;
+
+    void main(void) {
+        gl_Position = ciModelViewProjection * ciPosition;
+        trailPos = ciModelViewProjection * trailPosition;
+        vColor = ciColor;
+    }
+);
+
+const char* GEOMETRY_SHADER = CI_GLSL(150,
+    layout(points) in;
+    layout(line_strip, max_vertices = 3) out;
+
+    in vec4 trailPos[];
+    in vec4 vColor[];
+
+    out vec4 gColor;
+
+    void main()
+    {
+        gColor = vColor[0];
+
+        gl_Position = gl_in[0].gl_Position;
+        EmitVertex();
+
+        gl_Position = trailPos[0];
+        EmitVertex();
+
+        EndPrimitive();
+    }
+);
+
+const char* FRAGMENT_SHADER = CI_GLSL(150,
+    in  vec4 gColor;
+    out vec4 oColor;
+
+    void main(void) {
+        oColor = gColor;
+    }
+);
+
+/// ============================================================================================
+/// App class definition
+/// ============================================================================================
 
 class HoushouApp : public App
 {
-    int windowW;
-    int windowH;
+    /// Simulation configuration
+    /// ========================
+
+    // Screen width and height.
+    int windowWidth, windowHeight;
+
+    // Grid scale.
     float gridScale;
+
+    // Number of threads used.
     int threadCount;
+
+    // Target FPS (-1 = disable initial frame rate, use 30 FPS if enabled while running).
     float targetFPS;
+
+    // true = benchmark mode, false = not benchmark mode.
     bool benchmark;
+
+    // Benchmark name.
     string benchmarkLabel;
-    int benchmarkTimeout;
 
-    Timer benchmarkTimer;
-    vector<PerformanceLog> benchmarkRecord;
+    // Benchmark start time.
+    tm benchmarkStartTime;
 
-    Simulator* sim = nullptr;
+    // (Benchmark mode) Number of records stored before exiting the benchmark.
+    int benchmarkRecordLimit;
 
-    gl::GlslProgRef shaderProgram;
+    /// Simulation
+    /// ==========
+
+    // Simulator pointer to instance.
+    Simulator* simulator = nullptr;
+
+    /// Benchmarking
+    /// ============
+
+    // List of benchmark records.
+    vector<BenchmarkRecord> benchmarkRecords;
+
+    // Timer to count time before adding benchmark record.
+    Timer benchmarkRecordTimer;
+
+    /// Fluid rendering via shader
+    /// ==========================
+
     geom::BufferLayout particleLayout;
     gl::VboRef particleVbo;
     gl::BatchRef particleBatch;
+    gl::GlslProgRef shaderProgram;
 
+    // Terrain texture for drawing terrain.
     gl::TextureRef terrainTexture;
 
-    Timer lastUpdateTimer;
-    double lastAvgUpdateTime = 0;
+    /// Timer for update and draw time
+    /// ==============================
+
+    Timer avgUpdateTimer;
     double avgUpdateTime = 0;
-    double totalUpdateTime = 0;
-    int totalUpdateCount = 0;
+    double sumUpdateTime = 0;
+    int updateCount = 0;
 
-    Timer lastDrawTimer;
-    double lastAvgDrawTime = 0;
+    Timer avgDrawTimer;
     double avgDrawTime = 0;
-    double totalDrawTime = 0;
-    int totalDrawCount = 0;
+    double sumDrawTime = 0;
+    int drawCount = 0;
 
+    /// Private functions
+    /// =================
+
+    // Initializes the simulation from the beginning.
+    // After init, update() and draw() should work without problems.
     void init();
-    
+
+    // Write benchmark result and exit.
+    void writeBenchmarkResult() const;
+
 public:
+
+    /// Override Cinder lifecycle functions
+    /// ===================================
+
     void setup() override;
     void cleanup() override;
     void update() override;
     void draw() override;
+
+    /// Override mouse event handling
+    /// =============================
 
     void mouseUp(MouseEvent event) override;
     void mouseDown(MouseEvent event) override;
@@ -76,91 +178,110 @@ public:
     void mouseDrag(MouseEvent event) override;
     void mouseWheel(MouseEvent event) override;
 
+    /// Override keyboard event handling
+    /// ================================
+
     void keyDown(KeyEvent event) override;
     void keyUp(KeyEvent event) override;
 };
 
-// =============================================================================================
-// Initialization
-// =============================================================================================
+/// ================================================================================================
+/// Initialization
+/// ================================================================================================
 
 void HoushouApp::init()
 {
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
     // Open config file stream.
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
 
+    // If args > 1 (args[0] is program name), use args[1] as file name; otherwise, use config.txt.
     const auto& args = getCommandLineArgs();
-    auto configFile = args.size() > 1 ? (format{ "%s.txt" } % args[1]).str() : "config.txt";
-    auto configPath = getAssetPath(configFile);
+    const auto& configPath = getAssetPath((args.size() > 1) ? (format{ "%s.txt" } % args[1]).str() : "config.txt");
+
+    // Open config file stream.
     fstream fconfig(configPath, ios::in);
-    
+
     console() << format{ "Reading configuration file from '%s'." } % configPath << endl;
 
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
     // Read window width and height (for grid width and height) and grid scale.
-    // ---------------------------------------------------------------------------------------------
-
-    // If simulator is not nullptr, delete the old simulator.
-    if (sim != nullptr)
-    {
-        delete sim;
-        sim = nullptr;
-    }
+    // =============================================================================================
 
     fconfig
-        >> windowW >> windowH
+        >> windowWidth >> windowHeight
         >> gridScale;
-    
-    setWindowSize(windowW, windowH);
-    sim = new Simulator(windowW, windowH, gridScale);
 
-    console() << format{ "MPM grid size: %dx%d (grid scale=%g)" } % windowW % windowH % gridScale << endl;
+    // Set window size to match grid width and height.
+    setWindowSize(windowWidth, windowHeight);
 
-    // ---------------------------------------------------------------------------------------------
+    // Create a new simulator.
+    // If simulator is not nullptr, delete the old simulator.
+    if (simulator != nullptr)
+    {
+        delete simulator;
+    }
+    simulator = new Simulator(windowWidth, windowHeight, gridScale);
+
+    console() << format{ "Simulation size: %dx%d (grid scale=%g)" } % windowWidth % windowHeight % gridScale << endl;
+
+    // =============================================================================================
     // Read thread count.
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
 
     fconfig >> threadCount;
 
+    // If thread count <= 0, use number from thread::hardware_concurrency().
     if (threadCount <= 0)
     {
         threadCount = thread::hardware_concurrency();
         console() << "Using number of threads based on thread::hardware_concurrency()." << endl;
     }
 
-    sim->setThreadCount(threadCount);
+    // Set simulator thread count.
+    simulator->setThreadCount(threadCount);
 
     console() << format{ "Thread count: %d" } % threadCount << endl;
 
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
     // Read target FPS.
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
 
     fconfig >> targetFPS;
-    if (targetFPS > 0)
-    {
-        setFrameRate(targetFPS);
-        console() << format{ "Target frame rate: %g" } % targetFPS << endl;
-    }
-    else
+
+    // If target FPS is 0 or negative, disable frame limit.
+    // Otherwise, set target FPS to the provided number.
+    if (targetFPS <= 0)
     {
         disableFrameRate();
         console() << format{ "Frame rate limit is disabled" } << endl;
     }
+    else // (targetFPS > 0)
+    {
+        setFrameRate(targetFPS);
+        console() << format{ "Target frame rate: %g" } % targetFPS << endl;
+    }
 
-    // ---------------------------------------------------------------------------------------------
-    // Set benchmark mode.
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
+    // Read benchmark mode.
+    // =============================================================================================
 
     string benchmarkMode;
     fconfig >> benchmarkMode;
 
+    // If benchmark mode is "on", enable benchmark mode, then read benchmark label and benchmark record limit.
+    // Otherwise, disable benchmark mode.
     if (benchmarkMode == "on")
     {
-        fconfig >> benchmarkLabel >> benchmarkTimeout;
+        fconfig >> benchmarkLabel >> benchmarkRecordLimit;
+
         benchmark = true;
-        console() << format{ "Benchmark mode is on (timeout: %g s)" } % benchmarkTimeout << endl;
+
+        // Set benchmark start time.
+        const auto t = time(nullptr);
+        localtime_s(&benchmarkStartTime, &t);
+
+        console() << format{ "Benchmark mode is on (timeout: %g s)" } % benchmarkRecordLimit << endl;
     }
     else // (benchmarkMode != "on")
     {
@@ -168,18 +289,19 @@ void HoushouApp::init()
         console() << "Benchmark mode is off" << endl;
     }
 
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
     // Read material parameters.
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
 
     for (int n = 0; n < MATERIALS_COUNT; n++)
     {
-        Material& m = sim->materials[n];
+        Material& m = simulator->materials[n];
 
         // Copy default material values.
         m = Material();
 
-        // Read values in order. Ignore if value == 0 (leave material default values).
+        // Read material values in order.
+        // Ignore if value == 0 (leave material default values).
         float* values[] = {
             &m.mass,
             &m.restDensity,
@@ -196,7 +318,7 @@ void HoushouApp::init()
             &m.smoothing,
             &m.gravity
         };
-        for (int i = 0; i < _countof(values); i++)
+        for (int i = 0; i < _countof(values); i++) // note: _countof(values) might not be portable on Linux
         {
             float val;
             fconfig >> val;
@@ -212,9 +334,8 @@ void HoushouApp::init()
         fconfig >> r >> g >> b;
         m.color = Color(clamp(r, 0.0f, 1.0f), clamp(g, 0.0f, 1.0f), clamp(b, 0.0f, 1.0f));
 
-        // Print material data to console.
         console()
-            << format{ "Values for material #%d:" } % m.index << endl
+            << format{ "Material #%d:" } % m.index << endl
             << format{ "    Mass:                %.3g" } % m.mass << endl
             << format{ "    Rest density:        %.3g" } % m.restDensity << endl
             << format{ "    Stiffness:           %.3g" } % m.stiffness << endl
@@ -232,9 +353,9 @@ void HoushouApp::init()
             << format{ "    Color:               (%.2f, %.2f, %.2f)" } % m.color.r % m.color.g % m.color.b << endl;
     }
 
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
     // Read terrain texture.
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
 
     // Read terrain name.
     string terrainName;
@@ -243,25 +364,28 @@ void HoushouApp::init()
     // Load terrain texture.
     auto terrainPath = getAssetPath((format{ "terrain/%s.bmp" } % terrainName).str());
     auto terrainImage = Surface::create(loadImage(terrainPath));
-    auto terrainView = Surface::create(windowW, windowH, false);
+
+    // Create terrain surface.
+    auto terrainView = Surface::create(windowWidth, windowHeight, false);
 
     int
         imageW = terrainImage->getWidth(),
         imageH = terrainImage->getHeight();
 
-    // Iterate through all grid cells.
-    for (int gridX = 0; gridX < sim->gridW; gridX++)
+    // Iterate through all grid cells to set static polygon matrix.
+    for (int gridX = 0; gridX < simulator->gridWidth; gridX++)
     {
-        for (int gridY = 0; gridY < sim->gridH; gridY++)
+        for (int gridY = 0; gridY < simulator->gridHeight; gridY++)
         {
             vec2 pos(
-                (float(gridX) / sim->gridW) * imageW,
-                (float(gridY) / sim->gridH) * imageH
+                (float(gridX) / simulator->gridWidth) * imageW,
+                (float(gridY) / simulator->gridHeight) * imageH
             );
 
-            // Set static polygon matrix to TRUE if the pixel color is black.
+            // If pixel color on position is black, set static polygon matrix to true.
             bool black = terrainImage->getPixel(pos) == ColorA8u::black();
-            sim->terrainMatrix[GRID_INDEX(gridX, gridY, sim->gridH)] = black;
+            int i = GRID_INDEX(gridX, gridY, simulator->gridHeight);
+            simulator->terrainMatrix[i] = black;
         }
     }
 
@@ -275,66 +399,78 @@ void HoushouApp::init()
                 (float(viewY) / terrainView->getHeight()) * imageH
             );
 
-            // TRUE if image color is black, FALSE otherwise.
+            // If pixel color on position is black, set terrain view pixel to black.
             bool black = terrainImage->getPixel(pos) == ColorA8u::black();
-            terrainView->setPixel(vec2(viewX, viewY), ColorA(black ? TERRAIN_COLOR : SKY_COLOR));
+            terrainView->setPixel(vec2(viewX, viewY), black ? ColorA(TERRAIN_COLOR) : ColorA(0, 0, 0, 0));
         }
     }
 
-    // Create a texture for drawing from view.
+    // Create a texture for drawing from surface.
     terrainTexture = gl::Texture::create(*terrainView);
 
     console() << format{ "Terrain texture loaded from '%s'." } % terrainPath << endl;
 
-    // ---------------------------------------------------------------------------------------------
-    // Read fluid list
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
+    // Read fluids.
+    // =============================================================================================
 
+    // Read fluid count.
     int fluidCount;
     fconfig >> fluidCount;
+
+    // Loop through each fluids.
     for (int i = 0; i < fluidCount; i++)
     {
         float
             xMin, yMin,
             xMax, yMax,
-            spX, spY;
+            spacingX, spacingY;
         int materialIndex;
 
+        // Read fluid values. 
         fconfig
             >> xMin >> yMin
             >> xMax >> yMax
-            >> spX >> spY
+            >> spacingX >> spacingY
             >> materialIndex;
 
-        const Material& m = sim->materials[materialIndex];
-        for (float x = xMin; x <= xMax; x += spX)
+        // Add new particles at the described fluid position.
+        const Material& m = simulator->materials[materialIndex];
+        for (float x = xMin; x <= xMax; x += spacingX)
         {
-            for (float y = yMin; y <= yMax; y += spY)
+            for (float y = yMin; y <= yMax; y += spacingY)
             {
-                sim->particles.push_back(Particle(*sim, m, x, y));
+                simulator->particles.push_back(Particle(*simulator, m, x, y));
             }
         }
 
-        console() << format{ "Fluid with material #%d created from [%.1f, %.1f] to [%.1f, %.1f] (spacing: [%.1f, %.1f])." }
+        console()
+            << format{ "Fluid with material #%d created from [%.1f, %.1f] to [%.1f, %.1f] (spacing: [%.1f, %.1f])." }
             % materialIndex
             % xMin % yMin
             % xMax % yMax
-            % spX % spY
+            % spacingX % spacingY
             << endl;
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // Read dynamic polygon data
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
+    // Read polygons.
+    // =============================================================================================
 
+    // Read polygon count.
     int polygonCount;
     fconfig >> polygonCount;
+
+    // Loop through each polygons.
     for (int i = 0; i < polygonCount; i++)
     {
         Polygon p;
 
+        // Read vertex count.
         int vertexCount;
         fconfig >> vertexCount;
+
+        // Loop through each vertices.
         for (int j = 0; j < vertexCount; j++)
         {
             float x, y;
@@ -342,29 +478,31 @@ void HoushouApp::init()
             p.points.push_back(vec2(x, y));
         }
 
-        sim->polygons.push_back(p);
+        // Push new polygon into simulator.
+        simulator->polygons.push_back(p);
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // After init
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
+    // Additional things to do after init.
+    // =============================================================================================
 
     // Close config stream.
     fconfig.close();
 
-    // Setup last average times.
-    lastAvgUpdateTime = lastAvgDrawTime = getElapsedSeconds();
+    // Setup average update and draw timers.
+    avgUpdateTimer.start();
+    avgDrawTimer.start();
 
-    // Start benchmark timer.
+    // Start benchmark timer if in benchmark mode.
     if (benchmark)
     {
-        benchmarkTimer.start();
+        benchmarkRecordTimer.start();
     }
 }
 
-// =============================================================================================
-// Setup and cleanup
-// =============================================================================================
+/// ================================================================================================
+/// Setup and cleanup
+/// ================================================================================================
 
 void HoushouApp::setup()
 {
@@ -388,121 +526,79 @@ void HoushouApp::setup()
     particleLayout.append(geom::Attrib::CUSTOM_9, 3, sizeof(Particle), offsetof(Particle, trail));
     particleLayout.append(geom::Attrib::COLOR, 4, sizeof(Particle), offsetof(Particle, color));
 
+    // Perform initialization.
     init();
 }
 
 void HoushouApp::cleanup()
 {
     // Destroy simulator.
-    delete sim;
-    sim = nullptr;
+    delete simulator;
 }
 
-// =============================================================================================
-// Application loop
-// =============================================================================================
+/// ================================================================================================
+/// Application loop
+/// ================================================================================================
 
 void HoushouApp::update()
 {
-    // ---------------------------------------------------------------------------------------------
-    // Calculate delta time from last update timer
-    // ---------------------------------------------------------------------------------------------
-
-    double deltaTime = lastUpdateTimer.getSeconds();
-    lastUpdateTimer.start();
-
-    // ---------------------------------------------------------------------------------------------
-    // Perform update (surrounded by timer)
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
+    // Perform update.
+    // =============================================================================================
 
     Timer updateTimer(true);
 
-    sim->update(deltaTime);
+    simulator->update();
 
     auto timeToUpdate = updateTimer.getSeconds();
 
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
     // Calculate average update time.
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
 
-    double elapsedSeconds = getElapsedSeconds();
-    if (elapsedSeconds - lastAvgUpdateTime > 1)
+    // If update timer exceeds 1 second, calculate average update time, then reset accumulators and timer.
+    // Otherwise, increase accumulators.
+    if (avgUpdateTimer.getSeconds() > 1)
     {
-        avgUpdateTime = totalUpdateTime / totalUpdateCount;
-        lastAvgUpdateTime = elapsedSeconds;
-        totalUpdateTime = 0;
-        totalUpdateCount = 0;
+        avgUpdateTime = sumUpdateTime / updateCount;
+
+        sumUpdateTime = 0;
+        updateCount = 0;
+
+        avgUpdateTimer.start();
     }
-    else
+    else // (avgUpdateTimer.getSeconds() < 1)
     {
-        totalUpdateTime += timeToUpdate;
-        totalUpdateCount++;
+        sumUpdateTime += timeToUpdate;
+        updateCount++;
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // Check benchmark.
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
+    // Benchmark checking.
+    // =============================================================================================
 
     if (benchmark)
     {
-        if (benchmarkTimer.getSeconds() > 1)
+        // If time exceeds 1 second, push a new record.
+        if (benchmarkRecordTimer.getSeconds() > 1)
         {
-            PerformanceLog log;
-            log.elapsedTime = getElapsedSeconds();
-            log.avgUpdateTime = avgUpdateTime;
-            log.avgDrawTime = avgDrawTime;
-            log.avgFps = int(getAverageFps());
-            benchmarkRecord.push_back(log);
+            BenchmarkRecord br;
+            br.t = getElapsedSeconds();
+            br.u = avgUpdateTime;
+            br.d = avgDrawTime;
+            br.fps = getAverageFps();
+            benchmarkRecords.push_back(br);
 
-            if (benchmarkRecord.size() >= benchmarkTimeout)
+            // If record size exceeds record limit, write benchmark result and exit.
+            // Otherwise, restart timer.
+            if (int(benchmarkRecords.size()) >= benchmarkRecordLimit)
             {
-                // ---------------------------------------------------------------------------------
-                // Write benchmark output
-                // ---------------------------------------------------------------------------------
-
-                auto t = time(nullptr);
-                tm time;
-                localtime_s(&time, &t);
-
-                string fname = "benchmark";
-#ifdef _DEBUG
-                fname += "-DEBUG";
-#else
-                fname += "-RELEASE";
-#endif
-#ifdef _M_X64
-                fname += "-x64";
-#else
-                fname += "-x86";
-#endif
-                fname += (format{ "-%s.txt" } % put_time(&time, "%Y%m%d-%H.%M.%S")).str();
-
-                fstream fbenchmark(fname, ios::out);
-                fbenchmark
-                    << fname << endl
-                    << benchmarkLabel << endl
-                    << endl;
-
-                for (auto it = benchmarkRecord.cbegin(); it != benchmarkRecord.cend(); it++)
-                {
-                    auto& log = *it;
-
-                    fbenchmark
-                        << format{ "t = %.3f s, u = %.3f ms, d = %.3f ms, fps = %d fps" }
-                        % log.elapsedTime
-                        % (log.avgUpdateTime * 1000)
-                        % (log.avgDrawTime * 1000)
-                        % log.avgFps
-                        << endl;
-                }
-
-                fbenchmark.close();
-
+                writeBenchmarkResult();
                 exit(0);
             }
-            else
+            else // (benchmarkRecords.size() < benchmarkRecordLimit)
             {
-                benchmarkTimer.start(0);
+                benchmarkRecordTimer.start(0);
             }
         }
     }
@@ -510,26 +606,28 @@ void HoushouApp::update()
 
 void HoushouApp::draw()
 {
-    // Start draw timer.
     Timer drawTimer(true);
-
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
     // BEGIN DRAW
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
 
     gl::clear();
 
-    // ---------------------------------------------------------------------------------------------
-    // Draw terrain
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
+    // Draw terrain.
+    // =============================================================================================
 
+    // Set perspective matrix and color.
     gl::setMatricesWindowPersp(getWindowSize());
     gl::color(Color::white());
+
+    // Draw terrain texture.
     gl::draw(terrainTexture);
 
-    // ---------------------------------------------------------------------------------------------
-    // Draw contour
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
+    // Draw contour (TODO enable this only on interactive mode)
+    // =============================================================================================
+
     /*
     gl::setMatricesWindowPersp(getWindowSize());
     gl::color(Color(1.0f, 0.0f, 0.0f));
@@ -607,16 +705,21 @@ void HoushouApp::draw()
         }
     }
     */
-    // ---------------------------------------------------------------------------------------------
-    // Draw polygon
-    // ---------------------------------------------------------------------------------------------
 
+    // =============================================================================================
+    // Draw polygons.
+    // =============================================================================================
+
+    // Set perspective matrix and color.
     gl::setMatricesWindowPersp(getWindowSize());
-    gl::color(Color(0.0f, 0.0f, 0.75f));
-    for (auto it = sim->polygons.cbegin(); it != sim->polygons.cend(); it++)
+    gl::color(POLYGON_COLOR);
+
+    // Loop through polygons and draw.
+    for (auto it = simulator->polygons.cbegin(); it != simulator->polygons.cend(); it++)
     {
         const auto polygon = *it;
-        
+
+        // TODO Avoid recreating PolyLine2 objects: create PolyLine2 on Polygon object.
         PolyLine2 line;
         for (auto jt = polygon.points.cbegin(); jt != polygon.points.cend(); jt++)
         {
@@ -626,73 +729,78 @@ void HoushouApp::draw()
         gl::drawSolid(line);
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // Draw fluid
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
+    // Draw fluid.
+    // =============================================================================================
 
     // Set perspective matrix to match window size.
     gl::setMatricesWindowPersp(getWindowSize());
 
     // Setup particle VBO.
-    particleVbo = gl::Vbo::create(GL_ARRAY_BUFFER, sim->particles, GL_STREAM_DRAW);
+    particleVbo = gl::Vbo::create(GL_ARRAY_BUFFER, simulator->particles, GL_STREAM_DRAW);
 
     // Copy particle data to GPU.
     void *gpuMem = particleVbo->mapReplace();
-    memcpy(gpuMem, sim->particles.data(), sim->particles.size() * sizeof(Particle));
+    memcpy(gpuMem, simulator->particles.data(), simulator->particles.size() * sizeof(Particle));
     particleVbo->unmap();
 
     // Create mesh by pairing our particle layout with our particle VBO.
-    auto mesh = gl::VboMesh::create((int)sim->particles.size(), GL_POINTS, { { particleLayout, particleVbo } });
+    auto mesh = gl::VboMesh::create((int)simulator->particles.size(), GL_POINTS, { { particleLayout, particleVbo } });
     gl::Batch::AttributeMapping mapping({ { geom::Attrib::CUSTOM_9, "trailPosition" } });
 
     // Draw mesh with particle batch.
     particleBatch = gl::Batch::create(mesh, shaderProgram, mapping);
     particleBatch->draw();
 
-    // ---------------------------------------------------------------------------------------------
-    // Draw debug string
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
+    // Draw debug string.
+    // =============================================================================================
 
     stringstream debug;
+
+    // Basic debug data.
     debug
-        << format{ "Number of particles: %d" } % sim->particles.size() << endl
+        << format{ "Number of particles: %d" } % simulator->particles.size() << endl
         << format{ "Average time to update: %.3f ms" } % (avgUpdateTime * 1000) << endl
         << format{ "Average time to draw: %.3f ms" } % (avgDrawTime * 1000) << endl
         << format{ "Average FPS: %d frames/second" } % int(getAverageFps()) << endl;
 
+    // Additional data on benchmark mode.
     if (benchmark)
     {
         debug
             << endl
-            << format{ "Benchmark is currently running (timeout: %d)" } % benchmarkTimeout << endl
-            << format{ "Record size: %d" } % benchmarkRecord.size() << endl;
+            << format{ "Benchmark is currently running (timeout: %d)" } % benchmarkRecordLimit << endl
+            << format{ "Record size: %d" } % benchmarkRecords.size() << endl;
     }
 
+    // Draw string at top-left.
     gl::drawString(debug.str(), vec2(10, 10), Color::white(), Font("Arial", 16));
 
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
     // END DRAW
-    // ---------------------------------------------------------------------------------------------
-
-    // End draw timer.
+    // =============================================================================================
     auto timeToDraw = drawTimer.getSeconds();
 
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
     // Calculate average draw time.
-    // ---------------------------------------------------------------------------------------------
+    // =============================================================================================
 
-    double elapsedSeconds = getElapsedSeconds();
-    if (elapsedSeconds - lastAvgDrawTime > 1)
+    // If draw timer exceeds 1 second, calculate average update time, then reset accumulators and timer.
+    // Otherwise, increase accumulators.
+    if (avgDrawTimer.getSeconds() > 1)
     {
-        avgDrawTime = totalDrawTime / totalDrawCount;
-        lastAvgDrawTime = elapsedSeconds;
-        totalDrawTime = 0;
-        totalDrawCount = 0;
+        avgDrawTime = sumDrawTime / drawCount;
+
+        sumDrawTime = 0;
+        drawCount = 0;
+
+        avgDrawTimer.start();
     }
-    else
+    else // (avgDrawTimer.getSeconds() < 1)
     {
-        totalDrawTime += timeToDraw;
-        totalDrawCount++;
+        sumDrawTime += timeToDraw;
+        drawCount++;
     }
 }
 
@@ -720,71 +828,7 @@ void HoushouApp::mouseWheel(MouseEvent event)
 // =============================================================================================
 
 void HoushouApp::keyDown(KeyEvent event)
-{
-    /*
-    switch (event.getCode())
-    {
-    // F1: disable/enable frame rate locking.
-    case KeyEvent::KEY_F1:
-        if (isFrameRateEnabled())
-        {
-            disableFrameRate();
-            console() << "Frame rate is now disabled." << endl;
-        }
-        else // (!isFrameRateEnabled())
-        {
-            setFrameRate(float(targetFPS));
-            console() << format{ "Target frame rate is now %d FPS." } % targetFPS << endl;
-        }
-        break;
-    // F2: disable/enable draw contour.
-    case KeyEvent::KEY_F2:
-        showContour = !showContour;
-        if (showContour)
-        {
-            console() << "Contour is now shown (note: drawing might be slowed down)." << endl;
-        }
-        else // (!showContour)
-        {
-            console() << "Contour is now not shown." << endl;
-        }
-        break;
-    // F3: pause/resume simulation.
-    case KeyEvent::KEY_F3:
-        run = !run;
-        if (run)
-        {
-            console() << "Simulation resumed." << endl;
-        }
-        else // (!runUpdate)
-        {
-            console() << "Simulation paused." << endl;
-        }
-        break;
-    // Right/Left: increase/decrease addFluidU
-    // Up/Down:    increase/decrease addFluidV
-    // Backspace:  reset addFluidU-V
-    case KeyEvent::KEY_BACKSPACE:
-        addFluidU = addFluidV = 0;
-        break;
-    case KeyEvent::KEY_UP:
-        addFluidV += ADD_FLUID_UV_SPEED * FPS_TIME_MULTIPLIER;
-        break;
-    case KeyEvent::KEY_DOWN:
-        addFluidV -= ADD_FLUID_UV_SPEED * FPS_TIME_MULTIPLIER;
-        break;
-    case KeyEvent::KEY_LEFT:
-        addFluidU -= ADD_FLUID_UV_SPEED * FPS_TIME_MULTIPLIER;
-        break;
-    case KeyEvent::KEY_RIGHT:
-        addFluidU += ADD_FLUID_UV_SPEED * FPS_TIME_MULTIPLIER;
-        break;
-    default:
-        // Ignore unknown keystrokes.
-        break;
-    }
-    */
-}
+{ }
 
 void HoushouApp::keyUp(KeyEvent event)
 { }
@@ -799,55 +843,62 @@ CINDER_APP(HoushouApp, RendererGl, [](App::Settings *settings)
     settings->setConsoleWindowEnabled(true);
 })
 
-// =============================================================================================
-// Shaders
-// =============================================================================================
+/// ================================================================================================
+/// Write benchmark result
+/// ================================================================================================
 
-const char* VERTEX_SHADER = CI_GLSL(150,
-    uniform mat4 ciModelViewProjection;
+void HoushouApp::writeBenchmarkResult() const
+{
+    // =============================================================================================
+    // Create benchmark output file name
+    // =============================================================================================
 
-    in vec4 ciPosition;
-    in vec4 ciColor;
-    in vec4 trailPosition;
+    // Benchmark file name string.
+    string filename = "benchmark";
 
-    out vec4 vColor;
-    out vec4 trailPos;
+    // Add label.
+    filename += "-" + benchmarkLabel;
 
-    void main(void) {
-        gl_Position = ciModelViewProjection * ciPosition;
-        trailPos = ciModelViewProjection * trailPosition;
-        vColor = ciColor;
-    }
-);
+#ifdef DISABLE_COLLISION
+    filename += "-DISABLE_COLLISION";
+#endif
 
-const char* GEOMETRY_SHADER = CI_GLSL(150,
-    layout(points) in;
-    layout(line_strip, max_vertices = 3) out;
+    // Add "DEBUG"/"RELEASE" depending on the compilation flag.
+#ifdef _DEBUG
+    filename += "-DEBUG";
+#else
+    filename += "-RELEASE";
+#endif
 
-    in vec4 trailPos[];
-    in vec4 vColor[];
+    // Add "x86"/"x64" depending on the compilation flag.
+#ifdef _M_X64
+    filename += "-x64";
+#else
+    filename += "-x86";
+#endif
 
-    out vec4 gColor;
+    // Append time and .txt extension to file name.
+    filename += (format{ "-%s.txt" } % put_time(&benchmarkStartTime, "%Y%m%d-%H.%M.%S")).str();
 
-    void main()
+    // Open file stream for writing.
+    fstream fbenchmark(filename, ios::out);
+
+    // Write benchmark header.
+    fbenchmark
+        << benchmarkLabel
+        << endl
+        << endl;
+
+    // Write benchmark result.
+    for (auto it = benchmarkRecords.cbegin(); it != benchmarkRecords.cend(); it++)
     {
-        gColor = vColor[0];
+        auto& log = *it;
 
-        gl_Position = gl_in[0].gl_Position;
-        EmitVertex();
-
-        gl_Position = trailPos[0];
-        EmitVertex();
-
-        EndPrimitive();
+        fbenchmark
+            << format{ "t = %.3f s, u = %.3f ms, d = %.3f ms, fps = %d fps" }
+            % log.t % (log.u * 1000) % (log.d * 1000) % log.fps
+            << endl;
     }
-);
 
-const char* FRAGMENT_SHADER = CI_GLSL(150,
-        in  vec4 gColor;
-    out vec4 oColor;
-
-    void main(void) {
-        oColor = gColor;
-    }
-);
+    fbenchmark.close();
+}

@@ -1,0 +1,33 @@
+benchmark-DEBUG-x64-20171223-13.43.18.txt
+test
+
+t = 3.580 s, update = 38.975 ms, draw = 0.000 ms, fps = 0.4 fps
+t = 4.585 s, update = 31.189 ms, draw = 8.086 ms, fps = 20.9 fps
+t = 5.590 s, update = 27.799 ms, draw = 6.134 ms, fps = 24.0 fps
+t = 6.613 s, update = 27.249 ms, draw = 5.801 ms, fps = 28.8 fps
+t = 7.635 s, update = 28.687 ms, draw = 5.810 ms, fps = 29.3 fps
+t = 8.635 s, update = 29.200 ms, draw = 5.596 ms, fps = 28.3 fps
+t = 9.670 s, update = 28.988 ms, draw = 5.626 ms, fps = 28.1 fps
+t = 10.686 s, update = 29.601 ms, draw = 5.674 ms, fps = 28.0 fps
+t = 11.708 s, update = 29.828 ms, draw = 5.651 ms, fps = 27.6 fps
+t = 12.731 s, update = 29.914 ms, draw = 5.702 ms, fps = 27.4 fps
+t = 13.760 s, update = 30.151 ms, draw = 5.704 ms, fps = 27.4 fps
+t = 14.784 s, update = 29.917 ms, draw = 5.666 ms, fps = 27.2 fps
+t = 15.787 s, update = 30.402 ms, draw = 5.674 ms, fps = 27.3 fps
+t = 16.787 s, update = 30.485 ms, draw = 5.771 ms, fps = 26.9 fps
+t = 17.790 s, update = 30.506 ms, draw = 5.621 ms, fps = 27.0 fps
+t = 18.825 s, update = 30.392 ms, draw = 5.722 ms, fps = 26.9 fps
+t = 19.837 s, update = 30.719 ms, draw = 5.620 ms, fps = 27.0 fps
+t = 20.852 s, update = 30.952 ms, draw = 5.818 ms, fps = 26.7 fps
+t = 21.866 s, update = 30.892 ms, draw = 5.692 ms, fps = 26.6 fps
+t = 22.884 s, update = 31.003 ms, draw = 5.702 ms, fps = 26.6 fps
+t = 23.902 s, update = 31.105 ms, draw = 5.696 ms, fps = 26.5 fps
+t = 24.921 s, update = 31.068 ms, draw = 5.693 ms, fps = 26.5 fps
+t = 25.950 s, update = 31.325 ms, draw = 5.673 ms, fps = 26.5 fps
+t = 26.978 s, update = 31.467 ms, draw = 5.655 ms, fps = 26.3 fps
+t = 28.007 s, update = 31.396 ms, draw = 5.611 ms, fps = 26.3 fps
+t = 29.042 s, update = 31.707 ms, draw = 5.756 ms, fps = 26.2 fps
+t = 30.076 s, update = 31.582 ms, draw = 5.665 ms, fps = 26.1 fps
+t = 31.111 s, update = 31.747 ms, draw = 5.683 ms, fps = 26.1 fps
+t = 32.118 s, update = 32.026 ms, draw = 5.642 ms, fps = 26.1 fps
+t = 33.154 s, update = 31.759 ms, draw = 5.715 ms, fps = 25.9 fps

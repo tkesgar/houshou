@@ -1,0 +1,33 @@
+benchmark-DEBUG-x64-20171223-13.35.34.txt
+test
+
+t = 1.924 s, update = 30.222 ms, draw = 0.000 ms, fps = 2.0 fps
+t = 2.937 s, update = 26.990 ms, draw = 7.325 ms, fps = 26.9 fps
+t = 3.944 s, update = 27.101 ms, draw = 5.775 ms, fps = 29.6 fps
+t = 4.969 s, update = 27.549 ms, draw = 5.571 ms, fps = 29.9 fps
+t = 5.986 s, update = 28.398 ms, draw = 5.669 ms, fps = 29.1 fps
+t = 7.013 s, update = 28.765 ms, draw = 5.631 ms, fps = 28.5 fps
+t = 8.014 s, update = 29.197 ms, draw = 5.703 ms, fps = 28.2 fps
+t = 9.027 s, update = 29.524 ms, draw = 5.581 ms, fps = 27.9 fps
+t = 10.033 s, update = 29.460 ms, draw = 5.722 ms, fps = 27.7 fps
+t = 11.050 s, update = 29.762 ms, draw = 5.534 ms, fps = 27.8 fps
+t = 12.068 s, update = 29.711 ms, draw = 5.622 ms, fps = 27.4 fps
+t = 13.103 s, update = 30.272 ms, draw = 5.646 ms, fps = 27.5 fps
+t = 14.130 s, update = 30.100 ms, draw = 5.704 ms, fps = 27.1 fps
+t = 15.160 s, update = 30.184 ms, draw = 5.596 ms, fps = 27.3 fps
+t = 16.190 s, update = 30.165 ms, draw = 5.660 ms, fps = 27.2 fps
+t = 17.223 s, update = 30.194 ms, draw = 5.689 ms, fps = 27.1 fps
+t = 18.259 s, update = 30.437 ms, draw = 5.660 ms, fps = 27.2 fps
+t = 19.270 s, update = 30.851 ms, draw = 5.648 ms, fps = 26.8 fps
+t = 20.281 s, update = 30.632 ms, draw = 5.654 ms, fps = 26.8 fps
+t = 21.296 s, update = 30.833 ms, draw = 5.677 ms, fps = 26.7 fps
+t = 22.311 s, update = 30.949 ms, draw = 5.779 ms, fps = 26.6 fps
+t = 23.329 s, update = 31.037 ms, draw = 5.740 ms, fps = 26.6 fps
+t = 24.356 s, update = 31.474 ms, draw = 5.696 ms, fps = 26.5 fps
+t = 25.382 s, update = 31.288 ms, draw = 5.610 ms, fps = 26.3 fps
+t = 26.414 s, update = 31.594 ms, draw = 5.731 ms, fps = 26.3 fps
+t = 27.437 s, update = 31.212 ms, draw = 5.669 ms, fps = 26.1 fps
+t = 28.440 s, update = 31.771 ms, draw = 5.692 ms, fps = 26.4 fps
+t = 29.458 s, update = 32.427 ms, draw = 5.844 ms, fps = 25.9 fps
+t = 30.493 s, update = 31.648 ms, draw = 5.794 ms, fps = 25.6 fps
+t = 31.523 s, update = 31.545 ms, draw = 5.643 ms, fps = 26.1 fps
