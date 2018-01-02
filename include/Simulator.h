@@ -170,7 +170,7 @@ public:
     // Get number of threads.
     const int getThreadCount() const;
     // Set number of threads.
-    void setThreadCount(int threadCount);
+    void setThreadCount(const int threadCount);
 
     // Simulation update function.
     void update();

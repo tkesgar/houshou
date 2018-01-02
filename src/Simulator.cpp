@@ -178,7 +178,7 @@ const int Simulator::getThreadCount() const
     return int(threads.size());
 }
 
-void Simulator::setThreadCount(int threadCount)
+void Simulator::setThreadCount(const int threadCount)
 {
     threads = vector<thread>(threadCount);
 }
