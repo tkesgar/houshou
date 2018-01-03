@@ -191,7 +191,10 @@ void Simulator::update()
         threadCount = int(threads.size());
 
 #ifndef DISABLE_COLLISION
-
+    // ---------------------------------------------------------------------------------------------
+    // Polygon processings
+    // ---------------------------------------------------------------------------------------------
+    
     // Reset solid matrix.
     memset(solidMatrix, false, sizeof(bool) * GRID_SIZE(gridWidth, gridHeight));
 
@@ -245,7 +248,6 @@ void Simulator::update()
     for_each(threads.begin(), threads.end(), [](thread& x) { x.join(); });
 
     // Calculate normal matrix.
-    // TODO Parallelize this using threads.
     for (int x = 0; x < gridWidth - 1; x++)
     {
         for (int y = 0; y < gridHeight - 1; y++)
@@ -297,36 +299,42 @@ void Simulator::update()
                 case 0b1110:
                     reflect = lineTest(x, y, l.x, l.y, b.x, b.y) > 0;
                     break;
+
                 case 0b0010:
                     reflect = lineTest(x, y, b.x, b.y, r.x, r.y) < 0;
                     break;
                 case 0b1101:
                     reflect = lineTest(x, y, b.x, b.y, r.x, r.y) > 0;
                     break;
+
                 case 0b0100:
                     reflect = lineTest(x, y, t.x, t.y, r.x, r.y) > 0;
                     break;
                 case 0b1011:
                     reflect = lineTest(x, y, t.x, t.y, r.x, r.y) < 0;
                     break;
+
                 case 0b0111:
                     reflect = lineTest(x, y, l.x, l.y, t.x, t.y) < 0;
                     break;
                 case 0b1000:
                     reflect = lineTest(x, y, l.x, l.y, t.x, t.y) < 0;
                     break;
+
                 case 0b0011:
                     reflect = y > cy;
                     break;
                 case 0b1100:
                     reflect = y < cy;
                     break;
+
                 case 0b0110:
                     reflect = x > cx;
                     break;
                 case 0b1001:
                     reflect = x < cx;
                     break;
+
                 case 0b0101: {
                     const bool
                         lbtest = lineTest(x, y, l.x, l.y, b.x, b.y) < 0,
@@ -349,6 +357,7 @@ void Simulator::update()
                     }
                     break;
                 }
+
                 case 0b0000:
                 case 0b1111:
                     break;
@@ -365,7 +374,6 @@ void Simulator::update()
         }, t * particleCount / threadCount, (t + 1) == threadCount ? particleCount : (t + 1) * particleCount / threadCount, t));
     }
     for_each(threads.begin(), threads.end(), [](thread& x) { x.join(); });
-
 #endif
 
     // ---------------------------------------------------------------------------------------------
@@ -442,11 +450,12 @@ void Simulator::update()
                 // Apply position.
                 P.x += gu;
                 P.y += gv;
+
 #ifndef DISABLE_COLLISION
                 // ---------------------------------------------------------------------------------
                 // Calculate particle position and velocity due to reflection
                 // ---------------------------------------------------------------------------------
-
+                
                 switch (P.status)
                 {
                     // Do not do anything is particle is outside.
@@ -454,11 +463,12 @@ void Simulator::update()
                     break;
                     // Push outward if particle is inside.
                 case PARTICLE_INSIDE_POLYGON:
-                    P.x -= gu * 2 + 0.01f * rand() / RAND_MAX;
-                    P.y -= gv * 2 + 0.01f * rand() / RAND_MAX;
+                    P.x -= P.gu * 2;
+                    P.y -= P.gv * 2;
                     break;
                     // Recalculate particle position and velocity.
                 default:
+                    /*
                     // Flip particle if reflect on diagonals.
                     switch (P.status)
                     {
@@ -485,14 +495,32 @@ void Simulator::update()
                     P.gv *= normal.y;
                     P.u *= normal.x;
                     P.v *= normal.y;
+                    */
 
-                    // Calculate position.
-                    P.x -= P.gu + 0.01f * rand() / RAND_MAX;
-                    P.y -= P.gv * 2 + 0.01f * rand() / RAND_MAX;
+                    // Get normal vector based on index.
+                    vec2 _normal = normalIndex(P.status, P.ambiguous);
+                    _normal /= _normal.length();
+
+                    // Calculate reflected vector.
+                    vec2
+                        _gv(P.gu, P.gv),
+                        _v(P.u, P.v);
+                    _gv = -_gv + (2 * dot(_gv, _normal) * _normal);
+                    _v = -_v + (2 * dot(_v, _normal) * _normal);
+
+                    // Copy result to particle properties.
+                    P.gu = _gv.x;
+                    P.gv = _gv.y;
+                    P.u = _v.x;
+                    P.v = _v.y;
+
+                    P.x += P.u + 0.01f * rand() / RAND_MAX;
+                    P.y += P.v + 0.01f * rand() / RAND_MAX;
+
                     break;
                 }
 #endif
-#ifdef DISABLE_COLLISION
+
                 // Hard boundary correction.
                 if (P.x < 1)
                 {
@@ -510,7 +538,7 @@ void Simulator::update()
                 {
                     P.y = (gridHeight - 1) - 1 - 0.01f * rand() / RAND_MAX;
                 }
-#endif
+
                 // Assign final particle position, trail, and color.
                 P.position = vec3(P.x, P.y, 0) * gridScale;
                 P.trail = vec3(P.x - P.gu, P.y - P.gv, 0) * gridScale;
@@ -694,8 +722,10 @@ void Simulator::update()
                     T11 -= a * (0.5f * magnitude - sy * sy);
                 }
 
-#ifdef DISABLE_COLLISION
-                // Add wall forces.
+                // ---------------------------------------------------------------------------------
+                // Add wall forces
+                // ---------------------------------------------------------------------------------
+
                 if (P.x < 4)
                 {
                     fx += (4 - P.x);
@@ -713,23 +743,25 @@ void Simulator::update()
                 {
                     fy += (gridHeight - 4 - P.y);
                 }
-#endif
-#ifndef  DISABLE_COLLISION
 
-
+#ifndef DISABLE_COLLISION
                 // ---------------------------------------------------------------------------------
                 // Add force to push outward if particle is not outside polygon (inside/border)
                 // ---------------------------------------------------------------------------------
-
+                
                 if (P.status != PARTICLE_OUTSIDE_POLYGON)
                 {
-                    fx -= P.u;
-                    fy -= P.v;
+                    vec2 f(P.gu, P.gv);
+                    f *= (1.0f / f.length()) * 1.0f;
+
+                    fx -= f.x;
+                    fy -= f.y;
                 }
                 // Reset particle status.
                 P.status = PARTICLE_OUTSIDE_POLYGON;
 
 #endif // ! DISABLE_COLLISION
+
                 // Add forces to grid.
                 n = &grid[P.gridIndex];
                 for (int i = 0; i < 3; i++, n += gridHeight - 3) {
@@ -878,14 +910,14 @@ const vec2 normalIndex(const int index, const int ambiguous)
 {
     switch (index)
     {
-    case 0b0001: return vec2(1, -1);
-    case 0b1110: return vec2(-1, 1);
+    case 0b0001: return vec2(-1, 1);
+    case 0b1110: return vec2(1, -1);
 
     case 0b0010: return vec2(-1, -1);
     case 0b1101: return vec2(1, 1);
 
-    case 0b0100: return vec2(-1, 1);
-    case 0b1011: return vec2(1, -1);
+    case 0b0100: return vec2(1, -1);
+    case 0b1011: return vec2(-1, 1);
 
     case 0b1000: return vec2(1, 1);
     case 0b0111: return vec2(-1, -1);
