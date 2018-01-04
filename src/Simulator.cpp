@@ -5,6 +5,15 @@ using namespace std;
 using namespace ci;
 
 #define SMALL 0.001f
+#define TURN_R -1
+#define COLLINEAR 0
+#define TURN_L 1
+
+/// ================================================================================================
+/// Helper functions
+/// ================================================================================================
+
+inline const int turn(const vec2 p, const vec2 q, const vec2 r);
 
 inline const int lineTest(
     const float xtest, const float ytest,
@@ -12,9 +21,11 @@ inline const int lineTest(
     const float x2, const float y2
 );
 
-inline const vec2 normalIndex(const int index);
+inline const vec2 normalIndex(const int index, const int ambiguous);
 
-std::vector<std::thread> threads(thread::hardware_concurrency());
+/// ================================================================================================
+/// Particle
+/// ================================================================================================
 
 Particle::Particle(
     const Simulator& simulator,
@@ -34,12 +45,12 @@ Particle::Particle(
     // Set initial grid position and index.
     gridX = int(x - 0.5f);
     gridY = int(y - 0.5f);
-    gridIndex = GRID_INDEX(gridX, gridY, simulator.gridH);
+    gridIndex = GRID_INDEX(gridX, gridY, simulator.gridHeight);
 
-    quadraticInterpolationKernel();
+    quadraticInterpolationKernelWeights();
 }
 
-void Particle::quadraticInterpolationKernel()
+void Particle::quadraticInterpolationKernelWeights()
 {
     float dx = gridX - x, dy = gridY - y;
 
@@ -62,24 +73,68 @@ void Particle::quadraticInterpolationKernel()
     gy[2] = dy - 1.5f;
 }
 
-Node::Node() :
-    cgx(), cgy()
-{ }
+/// ================================================================================================
+/// Polygon
+/// ================================================================================================
 
-Simulator::Simulator(int gridWidth, int gridHeight, float scale) :
-    scale(scale),
-    gridW(gridWidth),
-    gridH(gridHeight),
-    activeGrids(gridWidth * gridHeight)
+const bool Polygon::isInside(const float x, const float y) const
 {
+    const vec2 p(x, y);
+    const int pointsCount = int(points.size());
+    for (int i = 0; i < pointsCount; i++)
+    {
+        int j = i + 1;
+        if (j >= pointsCount)
+        {
+            j = 0;
+        }
+
+        const vec2
+            a = points[i],
+            b = points[j];
+
+        if (turn(a, b, p) != TURN_L)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/// ================================================================================================
+/// Node
+/// ================================================================================================
+
+Node::Node()
+{
+    memset(cgx, 0, sizeof(float) * 4);
+    memset(cgy, 0, sizeof(float) * 4);
+}
+
+/// ================================================================================================
+/// Simulator
+/// ================================================================================================
+
+Simulator::Simulator(int width, int height, float scale) :
+    gridScale(scale),
+    width(width),
+    height(height),
+    gridWidth(int(width / scale)),
+    gridHeight(int(height / scale)),
+    threads(thread::hardware_concurrency())
+{
+    // Resize active grid size.
+    activeGrids.resize(gridWidth * gridHeight);
+
     // Initialize grid array.
     grid = new Node[gridWidth * gridHeight]();
 
     // Initialize static polygon matrix.
-    staticPolygonMatrix = new bool[gridWidth * gridHeight]();
+    terrainMatrix = new bool[gridWidth * gridHeight]();
 
     // Initialize polygon matrix.
-    polygonMatrix = new bool[gridWidth * gridHeight]();
+    solidMatrix = new bool[gridWidth * gridHeight]();
 
     // Initialize normal matrix.
     normalMatrix = new int[gridWidth * gridHeight]();
@@ -94,60 +149,122 @@ Simulator::Simulator(int gridWidth, int gridHeight, float scale) :
 Simulator::~Simulator()
 {
     delete grid;
-    delete staticPolygonMatrix;
-    delete polygonMatrix;
+    delete terrainMatrix;
+    delete solidMatrix;
     delete normalMatrix;
 }
 
-float Simulator::uscip(
-    float p00, float x00, float y00,
-    float p01, float x01, float y01,
-    float p10, float x10, float y10,
-    float p11, float x11, float y11,
-    float u, float v
-) {
-    float
+const float Simulator::uscip(
+    const float p00, const float x00, const float y00,
+    const float p01, const float x01, const float y01,
+    const float p10, const float x10, const float y10,
+    const float p11, const float x11, const float y11,
+    const float u, const float v
+) const
+{
+    const float
         dx = x00 - x01,
         dy = y00 - y10,
         a = p01 - p00,
         b = p11 - p10 - a,
         c = p10 - p00,
         d = y11 - y01;
+
     return ((((d - 2 * b - dy) * u - 2 * a + y00 + y01) * v + ((3 * b + 2 * dy - d) * u + 3 * a - 2 * y00 - y01)) * v + ((((2 * c - x00 - x10) * u + (3 * b + 2 * dx + x10 - x11)) * u - b - dy - dx) * u + y00)) * v + (((x11 - 2 * (p11 - p01 + c) + x10 + x00 + x01) * u + (3 * c - 2 * x00 - x10)) * u + x00) * u + p00;
 }
 
-void Simulator::update(double deltaTime)
+const int Simulator::getThreadCount() const
+{
+    return int(threads.size());
+}
+
+void Simulator::setThreadCount(const int threadCount)
+{
+    threads = vector<thread>(threadCount);
+}
+
+void Simulator::update()
 {
     const int
         particleCount = int(particles.size()),
+        polygonCount = int(polygons.size()),
         threadCount = int(threads.size());
+
+#ifndef DISABLE_COLLISION
+    // ---------------------------------------------------------------------------------------------
+    // Polygon processings
+    // ---------------------------------------------------------------------------------------------
+
+    // Reset solid matrix.
+    memset(solidMatrix, false, sizeof(bool) * GRID_SIZE(gridWidth, gridHeight));
 
     // Copy static polygon matrix to polygon matrix.
     memcpy_s(
-        polygonMatrix,       sizeof(bool) * GRID_SIZE(gridW, gridH),
-        staticPolygonMatrix, sizeof(bool) * GRID_SIZE(gridW, gridH)
+        solidMatrix, sizeof(bool) * GRID_SIZE(gridWidth, gridHeight),
+        terrainMatrix, sizeof(bool) * GRID_SIZE(gridWidth, gridHeight)
     );
 
-    // TODO Add dynamic polygon.
+    // Set solid matrix values.
+    for (int t = 0; t < threadCount; t++)
+    {
+        threads[t] = thread(bind([&](const int bi, const int ei, const int t) {
+            for (int pi = bi; pi < ei; pi++)
+            {
+                const Polygon& polygon = polygons[pi];
+
+                // Find minimum X and Y for each polygons.
+                int
+                    minX = gridWidth,
+                    minY = gridHeight,
+                    maxX = 0,
+                    maxY = 0;
+                for (auto jt = polygon.points.cbegin(); jt != polygon.points.cend(); jt++)
+                {
+                    const vec2& p = *jt;
+
+                    minX = min(minX, int(p.x));
+                    maxX = max(maxX, int(p.x));
+                    minY = min(minY, int(p.y));
+                    maxY = max(maxY, int(p.y));
+                }
+
+                // Loop [minX..maxX][minY..maxY] and set solid matrix if point is inside polygon.
+                for (int x = minX; x <= maxX; x++)
+                {
+                    for (int y = minY; y <= maxY; y++)
+                    {
+                        int pos = GRID_INDEX(x, y, gridHeight);
+
+                        if (!solidMatrix[pos])
+                        {
+                            auto result = polygon.isInside(float(x), float(y));
+                            solidMatrix[pos] = result;
+                        }
+                    }
+                }
+            }
+        }, t * polygonCount / threadCount, (t + 1) == threadCount ? polygonCount : (t + 1) * polygonCount / threadCount, t));
+    }
+    for_each(threads.begin(), threads.end(), [](thread& x) { x.join(); });
 
     // Calculate normal matrix.
-    for (int x = 0; x < gridW - 1; x++)
+    for (int x = 0; x < gridWidth - 1; x++)
     {
-        for (int y = 0; y < gridH - 1; y++)
+        for (int y = 0; y < gridHeight - 1; y++)
         {
             int
-                tl0 = GRID_INDEX(x, y, gridH),
-                tr1 = GRID_INDEX(x + 1, y, gridH),
-                br2 = GRID_INDEX(x + 1, y + 1, gridH),
-                bl3 = GRID_INDEX(x, y + 1, gridH);
+                tl0 = GRID_INDEX(x, y, gridHeight),
+                tr1 = GRID_INDEX(x + 1, y, gridHeight),
+                br2 = GRID_INDEX(x + 1, y + 1, gridHeight),
+                bl3 = GRID_INDEX(x, y + 1, gridHeight);
 
             int index = 0b0000;
-            if (polygonMatrix[tl0]) index |= 0b1000;
-            if (polygonMatrix[tr1]) index |= 0b0100;
-            if (polygonMatrix[br2]) index |= 0b0010;
-            if (polygonMatrix[bl3]) index |= 0b0001;
+            if (solidMatrix[tl0]) index |= 0b1000;
+            if (solidMatrix[tr1]) index |= 0b0100;
+            if (solidMatrix[br2]) index |= 0b0010;
+            if (solidMatrix[bl3]) index |= 0b0001;
 
-            normalMatrix[GRID_INDEX(x, y, gridH)] = index;
+            normalMatrix[GRID_INDEX(x, y, gridHeight)] = index;
         }
     }
 
@@ -162,17 +279,18 @@ void Simulator::update(double deltaTime)
                 float x = P.x, y = P.y;
                 int
                     cx = P.gridX, cy = P.gridY,
-                    index = normalMatrix[GRID_INDEX(cx, cy, gridH)];
+                    index = normalMatrix[GRID_INDEX(cx, cy, gridHeight)];
 
                 // Four cell midpoints.
                 vec2
-                    t(cx       , cy - 0.5f),
-                    b(cx       , cy + 0.5f),
-                    l(cx - 0.5f, cy       ),
-                    r(cx + 0.5f, cy       );
+                    t(cx, cy - 0.5f),
+                    b(cx, cy + 0.5f),
+                    l(cx - 0.5f, cy),
+                    r(cx + 0.5f, cy);
 
                 // Test whether polygon reflects or not.
                 bool reflect = false;
+                int ambiguous = NOT_AMBIGUOUS;
                 switch (index)
                 {
                 case 0b0001:
@@ -181,42 +299,65 @@ void Simulator::update(double deltaTime)
                 case 0b1110:
                     reflect = lineTest(x, y, l.x, l.y, b.x, b.y) > 0;
                     break;
+
                 case 0b0010:
                     reflect = lineTest(x, y, b.x, b.y, r.x, r.y) < 0;
                     break;
                 case 0b1101:
                     reflect = lineTest(x, y, b.x, b.y, r.x, r.y) > 0;
                     break;
+
                 case 0b0100:
                     reflect = lineTest(x, y, t.x, t.y, r.x, r.y) > 0;
                     break;
                 case 0b1011:
                     reflect = lineTest(x, y, t.x, t.y, r.x, r.y) < 0;
                     break;
+
                 case 0b0111:
                     reflect = lineTest(x, y, l.x, l.y, t.x, t.y) < 0;
                     break;
                 case 0b1000:
                     reflect = lineTest(x, y, l.x, l.y, t.x, t.y) < 0;
                     break;
+
                 case 0b0011:
                     reflect = y > cy;
                     break;
                 case 0b1100:
                     reflect = y < cy;
                     break;
+
                 case 0b0110:
                     reflect = x > cx;
                     break;
                 case 0b1001:
                     reflect = x < cx;
                     break;
-                case 0b0101:
-                    reflect = lineTest(x, y, l.x, l.y, b.x, b.y) < 0 || lineTest(x, y, t.x, t.y, r.x, r.y) > 0;
+
+                case 0b0101: {
+                    const bool
+                        lbtest = lineTest(x, y, l.x, l.y, b.x, b.y) < 0,
+                        trtest = lineTest(x, y, t.x, t.y, r.x, r.y) > 0;
+                    if (lbtest || trtest)
+                    {
+                        reflect = true;
+                        ambiguous = trtest ? AMBIGUOUS_TR : AMBIGUOUS_LB;
+                    }
                     break;
-                case 0b1010:
-                    reflect = lineTest(x, y, l.x, l.y, b.x, b.y) > 0 || lineTest(x, y, t.x, t.y, r.x, r.y) < 0;
+                }
+                case 0b1010: {
+                    const bool
+                        lbtest = lineTest(x, y, l.x, l.y, b.x, b.y) > 0,
+                        trtest = lineTest(x, y, t.x, t.y, r.x, r.y) < 0;
+                    if (lbtest || trtest)
+                    {
+                        reflect = true;
+                        ambiguous = lbtest ? AMBIGUOUS_LB : AMBIGUOUS_TR;
+                    }
                     break;
+                }
+
                 case 0b0000:
                 case 0b1111:
                     break;
@@ -227,11 +368,13 @@ void Simulator::update(double deltaTime)
                 // Status:
                 //   - If reflect: use index.
                 //   - If not reflect: either inside polygon (index == 0b1111) or outside.
-                P.status = reflect ? index : (index == 0b1111 ? INSIDE : OUTSIDE);
+                P.status = reflect ? index : (index == 0b1111 ? PARTICLE_INSIDE_POLYGON : PARTICLE_OUTSIDE_POLYGON);
+                P.ambiguous = ambiguous;
             }
         }, t * particleCount / threadCount, (t + 1) == threadCount ? particleCount : (t + 1) * particleCount / threadCount, t));
     }
     for_each(threads.begin(), threads.end(), [](thread& x) { x.join(); });
+#endif
 
     // ---------------------------------------------------------------------------------------------
     // BEGIN MPM
@@ -256,7 +399,7 @@ void Simulator::update(double deltaTime)
                     *pgx = P.gx, *pgy = P.gy;
 
                 n = &grid[P.gridIndex];
-                for (int i = 0; i < 3; i++, n += gridH - 3)
+                for (int i = 0; i < 3; i++, n += gridHeight - 3)
                 {
                     for (int j = 0; j < 3; j++, n++)
                     {
@@ -308,22 +451,24 @@ void Simulator::update(double deltaTime)
                 P.x += gu;
                 P.y += gv;
 
+#ifndef DISABLE_COLLISION
                 // ---------------------------------------------------------------------------------
                 // Calculate particle position and velocity due to reflection
                 // ---------------------------------------------------------------------------------
 
                 switch (P.status)
                 {
-                // Do not do anything is particle is outside.
-                case OUTSIDE:
+                    // Do not do anything is particle is outside.
+                case PARTICLE_OUTSIDE_POLYGON:
                     break;
-                // Push outward if particle is inside.
-                case INSIDE:
-                    P.x -= gu * 2 + 0.01f * rand() / RAND_MAX;
-                    P.y -= gv * 2 + 0.01f * rand() / RAND_MAX;
+                    // Push outward if particle is inside.
+                case PARTICLE_INSIDE_POLYGON:
+                    P.x -= P.gu * 2;
+                    P.y -= P.gv * 2;
                     break;
-                // Recalculate particle position and velocity.
+                    // Recalculate particle position and velocity.
                 default:
+                    /*
                     // Flip particle if reflect on diagonals.
                     switch (P.status)
                     {
@@ -335,58 +480,77 @@ void Simulator::update(double deltaTime)
                     case 0b1011:
                     case 0b1000:
                     case 0b0111:
-                        swap(P.u, P.v);
-                        swap(P.gu, P.gv);
-                        break;
+                    swap(P.u, P.v);
+                    swap(P.gu, P.gv);
+                    break;
                     default:
-                        break;
+                    break;
                     }
 
                     // Get normal vector based on index.
-                    vec2 normal = -normalIndex(P.status);
+                    vec2 normal = -normalIndex(P.status, P.ambiguous);
 
                     // Multiply velocities by normal sign.
                     P.gu *= normal.x;
                     P.gv *= normal.y;
                     P.u *= normal.x;
                     P.v *= normal.y;
+                    */
 
-                    // Calculate position.
-                    P.x -= P.gu + 0.01f * rand() / RAND_MAX;
-                    P.y -= P.gv * 2 + 0.01f * rand() / RAND_MAX;
+                    // Get normal vector based on index.
+                    vec2 _normal = normalIndex(P.status, P.ambiguous);
+                    _normal /= _normal.length();
+
+                    // Calculate reflected vector.
+                    vec2
+                        _gv(P.gu, P.gv),
+                        _v(P.u, P.v);
+                    _gv = -_gv + (2 * dot(_gv, _normal) * _normal);
+                    _v = -_v + (2 * dot(_v, _normal) * _normal);
+
+                    // Copy result to particle properties.
+                    P.gu = _gv.x;
+                    P.gv = _gv.y;
+                    P.u = _v.x;
+                    P.v = _v.y;
+
+                    P.x += P.u + 0.01f * rand() / RAND_MAX;
+                    P.y += P.v + 0.01f * rand() / RAND_MAX;
+
                     break;
                 }
-#ifdef WALL
+#endif
+
                 // Hard boundary correction.
                 if (P.x < 1)
                 {
                     P.x = 1 + 0.01f * rand() / RAND_MAX;
                 }
-                else if (P.x > (gridW - 1) - 1)
+                else if (P.x >(gridWidth - 1) - 1)
                 {
-                    P.x = (gridW - 1) - 1 - 0.01f * rand() / RAND_MAX;
+                    P.x = (gridWidth - 1) - 1 - 0.01f * rand() / RAND_MAX;
                 }
                 if (P.y < 1)
                 {
                     P.y = 1 + 0.01f * rand() / RAND_MAX;
                 }
-                else if (P.y > (gridH - 1) - 1)
+                else if (P.y >(gridHeight - 1) - 1)
                 {
-                    P.y = (gridH - 1) - 1 - 0.01f * rand() / RAND_MAX;
+                    P.y = (gridHeight - 1) - 1 - 0.01f * rand() / RAND_MAX;
                 }
-#endif
+
                 // Assign final particle position, trail, and color.
-                P.position = vec3(P.x, P.y, 0) * scale;
-                P.trail = vec3(P.x - P.gu, P.y - P.gv, 0) * scale;
+                P.position = vec3(P.x, P.y, 0) * gridScale;
+                P.trail = vec3(P.x - P.gu, P.y - P.gv, 0) * gridScale;
                 P.color = M.color;
 
                 // Update grid cell index and kernel weights.
                 int
                     cx = P.gridX = (int)(P.x - 0.5f),
                     cy = P.gridY = (int)(P.y - 0.5f);
-                P.gridIndex = GRID_INDEX(cx, cy, gridH);
+                P.gridIndex = GRID_INDEX(cx, cy, gridHeight);
 
-                P.quadraticInterpolationKernel();
+                P.quadraticInterpolationKernelWeights();
 
                 // Add particle mass, velocity and density gradient to grid.
                 int materialIndex = P.material.index;
@@ -397,7 +561,7 @@ void Simulator::update(double deltaTime)
                     *py = P.py, *gy = P.gy;
 
                 n = &grid[P.gridIndex];
-                for (int i = 0; i < 3; i++, n += gridH - 3)
+                for (int i = 0; i < 3; i++, n += gridHeight - 3)
                 {
                     for (int j = 0; j < 3; j++, n++)
                     {
@@ -422,7 +586,7 @@ void Simulator::update(double deltaTime)
 
     // Add active nodes to list.
     activeGrids.clear();
-    for (int i = 0; i < gridW * gridH; i++)
+    for (int i = 0; i < gridWidth * gridHeight; i++)
     {
         Node& N = grid[i];
 
@@ -478,7 +642,7 @@ void Simulator::update(double deltaTime)
                 // Calculate total velocity gradient and surface tension.
                 n = &grid[P.gridIndex];
                 int materialIndex = M.index;
-                for (int i = 0; i < 3; i++, n += gridH - 3)
+                for (int i = 0; i < 3; i++, n += gridHeight - 3)
                 {
                     for (int j = 0; j < 3; j++, n++)
                     {
@@ -503,10 +667,10 @@ void Simulator::update(double deltaTime)
                 // Get node for current particle.
                 int cx = (int)P.x, cy = (int)P.y;
                 const Node&
-                    n1 = grid[GRID_INDEX(cx, cy, gridH)],
-                    n2 = grid[GRID_INDEX(cx, cy + 1, gridH)],
-                    n3 = grid[GRID_INDEX(cx + 1, cy, gridH)],
-                    n4 = grid[GRID_INDEX(cx + 1, cy + 1, gridH)];
+                    n1 = grid[GRID_INDEX(cx, cy, gridHeight)],
+                    n2 = grid[GRID_INDEX(cx, cy + 1, gridHeight)],
+                    n3 = grid[GRID_INDEX(cx + 1, cy, gridHeight)],
+                    n4 = grid[GRID_INDEX(cx + 1, cy + 1, gridHeight)];
 
                 // Calculate particle density and pressure.
                 float
@@ -558,41 +722,49 @@ void Simulator::update(double deltaTime)
                     T11 -= a * (0.5f * magnitude - sy * sy);
                 }
 
-#ifdef WALL
-                // Add wall forces.
+                // ---------------------------------------------------------------------------------
+                // Add wall forces
+                // ---------------------------------------------------------------------------------
+
                 if (P.x < 4)
                 {
                     fx += (4 - P.x);
                 }
-                else if (P.x > gridW - 4)
+                else if (P.x > gridWidth - 4)
                 {
-                    fx += (gridW - 4 - P.x);
+                    fx += (gridWidth - 4 - P.x);
                 }
 
                 if (P.y < 4)
                 {
                     fy += (4 - P.y);
                 }
-                else if (P.y > gridH - 4)
+                else if (P.y > gridHeight - 4)
                 {
-                    fy += (gridH - 4 - P.y);
+                    fy += (gridHeight - 4 - P.y);
                 }
-#endif
+
+#ifndef DISABLE_COLLISION
                 // ---------------------------------------------------------------------------------
                 // Add force to push outward if particle is not outside polygon (inside/border)
                 // ---------------------------------------------------------------------------------
 
-                if (P.status != OUTSIDE)
+                if (P.status != PARTICLE_OUTSIDE_POLYGON)
                 {
-                    fx -= P.u;
-                    fy -= P.v;
+                    vec2 f(P.gu, P.gv);
+                    f *= (1.0f / f.length()) * 1.0f;
+
+                    fx -= f.x;
+                    fy -= f.y;
                 }
                 // Reset particle status.
-                P.status = OUTSIDE;
+                P.status = PARTICLE_OUTSIDE_POLYGON;
+
+#endif // ! DISABLE_COLLISION
 
                 // Add forces to grid.
                 n = &grid[P.gridIndex];
-                for (int i = 0; i < 3; i++, n += gridH - 3) {
+                for (int i = 0; i < 3; i++, n += gridHeight - 3) {
                     for (int j = 0; j < 3; j++, n++)
                     {
                         float
@@ -640,7 +812,7 @@ void Simulator::update(double deltaTime)
 
                 // Update particle velocities.
                 n = &grid[P.gridIndex];
-                for (int i = 0; i < 3; i++, n += gridH - 3)
+                for (int i = 0; i < 3; i++, n += gridHeight - 3)
                 {
                     for (int j = 0; j < 3; j++, n++)
                     {
@@ -667,7 +839,7 @@ void Simulator::update(double deltaTime)
 
                 // Add particle momentum back to the grid.
                 n = &grid[P.gridIndex];
-                for (int i = 0; i < 3; i++, n += gridH - 3)
+                for (int i = 0; i < 3; i++, n += gridHeight - 3)
                 {
                     for (int j = 0; j < 3; j++, n++)
                     {
@@ -710,6 +882,16 @@ void Simulator::update(double deltaTime)
     // ---------------------------------------------------------------------------------------------
 }
 
+/// ================================================================================================
+/// Helper functions
+/// ================================================================================================
+
+const int turn(const vec2 p, const vec2 q, const vec2 r)
+{
+    const float result = ((r.x - q.x) * (p.y - q.y)) - ((r.y - q.y) * (p.x - q.x));
+    return (abs(result) < SMALL) ? COLLINEAR : (signbit(result) ? TURN_L : TURN_R);
+}
+
 const int lineTest(
     const float xtest, const float ytest,
     const float x1, const float y1,
@@ -724,30 +906,49 @@ const int lineTest(
     return (abs(d) < SMALL) ? 0 : (signbit(d) ? 1 : -1);
 }
 
-const vec2 normalIndex(const int index)
+const vec2 normalIndex(const int index, const int ambiguous)
 {
     switch (index)
     {
-    case 0b0001: return vec2( 1, -1);
-    case 0b1110: return vec2(-1,  1);
+    case 0b0001: return vec2(-1, 1);
+    case 0b1110: return vec2(1, -1);
 
     case 0b0010: return vec2(-1, -1);
-    case 0b1101: return vec2( 1,  1);
+    case 0b1101: return vec2(1, 1);
 
-    case 0b0011: return vec2( 0, -1);
-    case 0b1100: return vec2( 0,  1);
+    case 0b0100: return vec2(1, -1);
+    case 0b1011: return vec2(-1, 1);
 
-    case 0b0100: return vec2(-1,  1);
-    case 0b1011: return vec2( 1, -1);
-
-    case 0b0110: return vec2(-1,  0);
-    case 0b1001: return vec2( 1,  0);
-
+    case 0b1000: return vec2(1, 1);
     case 0b0111: return vec2(-1, -1);
-    case 0b1000: return vec2( 1,  1);
+
+    case 0b0011: return vec2(0, -1);
+    case 0b1100: return vec2(0, 1);
+
+    case 0b0110: return vec2(-1, 0);
+    case 0b1001: return vec2(1, 0);
 
     case 0b0101:
+        switch (ambiguous)
+        {
+        case AMBIGUOUS_LB:
+            return vec2(1, -1);
+        case AMBIGUOUS_TR:
+            return vec2(-1, 1);
+        default:
+            throw Exception("Invalid ambiguous: " + ambiguous);
+        }
     case 0b1010:
+        switch (ambiguous)
+        {
+        case AMBIGUOUS_LB:
+            return vec2(-1, -1);
+        case AMBIGUOUS_TR:
+            return vec2(1, 1);
+        default:
+            throw Exception("Invalid ambiguous: " + ambiguous);
+        }
+
     case 0b0000:
     case 0b1111:
     default:

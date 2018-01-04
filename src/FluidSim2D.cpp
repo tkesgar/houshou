@@ -185,9 +185,9 @@ void FluidSim2DApp::setup()
     sim = new Simulator((int)(windowW / scale), (int)(windowH / scale), scale);
 
     console() << format{ "Simulator created (w = %d, h = %d, scale = %.1f)." }
-        % sim->gridW
-        % sim->gridH
-        % sim->scale
+        % sim->gridWidth
+        % sim->gridHeight
+        % sim->gridScale
         << endl;
 
     // ---------------------------------------------------------------------------------------------
@@ -275,22 +275,22 @@ void FluidSim2DApp::setup()
     int
         imageW = terrainImage->getWidth(),
         imageH = terrainImage->getHeight(),
-        gridW = sim->gridW,
-        gridH = sim->gridH;
+        gridW = sim->gridWidth,
+        gridH = sim->gridHeight;
 
     // Iterate through all grid cells.
-    for (int x = 0; x < sim->gridW; x++)
+    for (int x = 0; x < sim->gridWidth; x++)
     {
-        for (int y = 0; y < sim->gridH; y++)
+        for (int y = 0; y < sim->gridHeight; y++)
         {
             vec2 pos(
-                (float(x) / sim->gridW) * imageW,
-                (float(y) / sim->gridH) * imageH
+                (float(x) / sim->gridWidth) * imageW,
+                (float(y) / sim->gridHeight) * imageH
             );
 
             // Set static polygon matrix to TRUE if the pixel color is black.
             bool black = terrainImage->getPixel(pos) == ColorA8u::black();
-            sim->staticPolygonMatrix[GRID_INDEX(x, y, sim->gridH)] = black;
+            sim->terrainMatrix[GRID_INDEX(x, y, sim->gridHeight)] = black;
         }
     }
 
@@ -403,10 +403,10 @@ void FluidSim2DApp::update()
                     {
                         const Material& m = sim->materials[addFluidMaterialIndex];
                         const float
-                            px = x / sim->scale + 0.01f * (rand() / RAND_MAX),
-                            py = y / sim->scale + 0.01f * (rand() / RAND_MAX),
-                            u = addFluidU / sim->scale * FPS_TIME_MULTIPLIER + 0.01f * (rand() / RAND_MAX),
-                            v = addFluidV / sim->scale * FPS_TIME_MULTIPLIER + 0.01f * (rand() / RAND_MAX);
+                            px = x / sim->gridScale + 0.01f * (rand() / RAND_MAX),
+                            py = y / sim->gridScale + 0.01f * (rand() / RAND_MAX),
+                            u = addFluidU / sim->gridScale * FPS_TIME_MULTIPLIER + 0.01f * (rand() / RAND_MAX),
+                            v = addFluidV / sim->gridScale * FPS_TIME_MULTIPLIER + 0.01f * (rand() / RAND_MAX);
 
                         sim->particles.push_back(Particle(*sim, m, px, py, u, v));
                     }
@@ -424,7 +424,7 @@ void FluidSim2DApp::update()
     // Update fluid simulator.
     if (run)
     {
-        sim->update(deltaTime);
+        sim->update();
     }
 
     auto timeToUpdate = updateTimer.getSeconds();
@@ -468,23 +468,23 @@ void FluidSim2DApp::draw()
         gl::setMatricesWindowPersp(getWindowSize());
         gl::color(Color(1.0f, 1.0f, 0.5f));
 
-        for (int x = 0; x < sim->gridW - 1; x++)
+        for (int x = 0; x < sim->gridWidth - 1; x++)
         {
-            for (int y = 0; y < sim->gridH - 1; y++)
+            for (int y = 0; y < sim->gridHeight - 1; y++)
             {
                 vec2
                     // offset
                     offset(0.5f, 0.5f),
                     // top
-                    t((vec2(x, y - 0.5f) + offset) * sim->scale),
+                    t((vec2(x, y - 0.5f) + offset) * sim->gridScale),
                     // bottom
-                    b((vec2(x, y + 0.5f) + offset) * sim->scale),
+                    b((vec2(x, y + 0.5f) + offset) * sim->gridScale),
                     // left
-                    l((vec2(x - 0.5f, y) + offset) * sim->scale),
+                    l((vec2(x - 0.5f, y) + offset) * sim->gridScale),
                     // right
-                    r((vec2(x + 0.5f, y) + offset) * sim->scale);
+                    r((vec2(x + 0.5f, y) + offset) * sim->gridScale);
 
-                int index = sim->normalMatrix[GRID_INDEX(x, y, sim->gridH)];
+                int index = sim->normalMatrix[GRID_INDEX(x, y, sim->gridHeight)];
                 switch (index)
                 {
                 case 0b0000:
